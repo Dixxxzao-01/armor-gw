@@ -1,0 +1,17 @@
+# 密钥不入公开库（用户部署时自填，结构见 *.example.json / .env.example）
+.env
+.env.bak
+data/keys.json
+data/upstreams.json
+data/suffix_bandit.json
+
+# 运行数据与日志
+logs/
+data/bench-*.json
+data/chain_memory.json
+
+# 构建缓存
+__pycache__/
+*.pyc
+console/node_modules/
+console/.vite/
