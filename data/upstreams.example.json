@@ -1,0 +1,19 @@
+[
+  {
+    "name": "a6api",
+    "provider": "openai_compat",
+    "base_url": "https://api.a6api.com/v1",
+    "api_key": "sk-你的上游APIKEY",
+    "model": "claude-opus-5-5",
+    "supports_prefill": false,
+    "safety_level": "high",
+    "weight": 100,
+    "timeout": 180.0,
+    "strategy": "crescendo",
+    "models": [
+      "grok-4.6",
+      "hy4-preview",
+      "qwen3.8-27b"
+    ]
+  }
+]
