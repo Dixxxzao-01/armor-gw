@@ -15,3 +15,10 @@ __pycache__/
 *.pyc
 console/node_modules/
 console/.vite/
+
+# 运行时状态（探针画像/题库/赌博机记忆/进化算子——首次运行自动生成）
+data/fingerprints/
+data/testbank/
+data/strategy_bandit.json
+data/bred_ops.json
+data/intel_*.md

@@ -137,8 +137,9 @@ curl -X POST http://127.0.0.1:8787/v1/admin/bench/run \
 ```
 
 Reports answer success rate, average attempts, latency, refusal-type
-distribution. There's also a regression bank (`/v1/admin/testbank/run`) for
-checking whether an upstream silently got stricter.
+distribution. There's also a small regression bank (`/v1/admin/testbank/run`)
+for checking whether an upstream silently got stricter — seeded with a mild
+question set on first run, edit `data/testbank/bank.json` to add your own.
 
 ## Notes
 
