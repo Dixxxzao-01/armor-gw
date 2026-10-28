@@ -141,11 +141,18 @@ distribution. There's also a small regression bank (`/v1/admin/testbank/run`)
 for checking whether an upstream silently got stricter — seeded with a mild
 question set on first run, edit `data/testbank/bank.json` to add your own.
 
+## Scope
+
+This is a personal research project on refusal handling in LLM workflows. It
+contains no attack payloads, no target lists, and no operational content —
+it only reshapes requests you already send through your own API keys to
+models you already have access to. Use it with providers you're authorized
+to access; how you use your own API keys is between you and your provider.
+
 ## Notes
 
 - Python 3.9+, runs fine on odd hardware (developed on aarch64 Alpine)
 - Console is pre-built — no Node.js needed
-- If you use this with third-party providers, that's between you and them
 
 ## License
 
