@@ -53,9 +53,8 @@ def load_bred_ops(base_dir: str) -> list[dict]:
 
 def save_bred_ops(base_dir: str, ops: list[dict]) -> None:
     p = os.path.join(base_dir, BRED_PATH)
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    with open(p, "w", encoding="utf-8") as f:
-        json.dump(ops, f, ensure_ascii=False, indent=2)
+    from .persist import save_json
+    save_json(p, ops)
 
 
 async def breed_one(upstream, family: str, dying_op, peer_ops: list,

@@ -18,7 +18,7 @@ while true; do
       done
     fi
     curl -s -X PUT localhost:8787/v1/admin/policy -H "Content-Type: application/json" \
-      -H "Authorization: Bearer sk-armor-test" -d '{"max_retry":8}' -o /dev/null 2>/dev/null
+      -H "Authorization: Bearer sk-local-dev" -d '{"max_retry":8}' -o /dev/null 2>/dev/null
   fi
   sleep 30
 done

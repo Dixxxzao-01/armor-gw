@@ -180,8 +180,9 @@ async def chat(
                     "out": result.usage.get("out", 0) + dc_result.usage.get("out", 0),
                 }
                 result = dc_result
-    except Exception:
-        pass  # 分解器异常不阻塞：退回原 refusal 终态
+    except Exception as e:
+        import logging as _l
+        _l.getLogger("armor-gw").warning("decomposer failed: %s: %s", type(e).__name__, str(e)[:120])
 
     if req.stream:
         return StreamingResponse(

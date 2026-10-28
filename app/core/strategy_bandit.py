@@ -25,13 +25,9 @@ DIAG_TO_FAMILY = {
 class StrategyBandit:
     def __init__(self, path: str):
         self.path = path
-        self.data: dict[str, dict[str, list[int]]] = {}
-        try:
-            if os.path.isfile(path):
-                with open(path, encoding="utf-8") as f:
-                    self.data = json.load(f)
-        except Exception:
-            self.data = {}
+        from .persist import load_json
+        # 原子读：损坏自愈回空表
+        self.data = load_json(path, {}) or {}
 
     def _arms(self, model: str) -> dict[str, list[int]]:
         return self.data.setdefault(model, {f: [0, 0] for f in FAMILIES})
@@ -73,9 +69,8 @@ class StrategyBandit:
                 self._persist()
 
     def _persist(self) -> None:
-        try:
-            os.makedirs(os.path.dirname(self.path), exist_ok=True)
-            with open(self.path, "w", encoding="utf-8") as f:
-                json.dump(self.data, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        # 原子写：写一半被杀也不损坏；失败留痕（学习数据是命根子）
+        from .persist import save_json
+        if not save_json(self.path, self.data):
+            import logging as _l
+            _l.getLogger("armor-gw").warning("bandit persist failed: %s", self.path)

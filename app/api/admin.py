@@ -35,12 +35,18 @@ async def series(authorization: str | None = Header(default=None)):
 @router.get("/policy")
 async def get_policy(authorization: str | None = Header(default=None)):
     _auth(authorization, None)
-    return state.policy.model_dump()
+    from .routes import pipeline as _pl
+    # 一致性自检：三处引用必须同体（断裂则热更新失效）
+    same = (state.policy is _pl.policy) and (state.policy is settings.policy)
+    d = state.policy.model_dump()
+    d["_refs_consistent"] = same
+    return d
 
 
 @router.put("/policy")
 async def put_policy(patch: dict, authorization: str | None = Header(default=None)):
     _auth(authorization, None)
+    from .routes import pipeline
     cur = state.policy.model_dump()
     unknown = set(patch) - set(cur)
     if unknown:
@@ -50,7 +56,24 @@ async def put_policy(patch: dict, authorization: str | None = Header(default=Non
     from ..core.prompts import PRESETS
     if "preset" in patch and "modules" not in patch:
         cur["modules"] = list(PRESETS.get(patch["preset"], cur["modules"]))
-    state.policy = ArmorPolicy(**cur)
+    new_policy = ArmorPolicy(**cur)
+    # 三处同步（缺一即断裂）：状态单例 / 全局配置 / 管道引用
+    state.policy = new_policy
+    settings.policy = new_policy
+    pipeline.policy = new_policy
+    cur["_refs_consistent"] = True
+    # 持久化：重启不丢面板配置
+    try:
+        import os as _os
+        import json as _json
+        _pdir = _os.path.join(_BASE, "data")
+        _os.makedirs(_pdir, exist_ok=True)
+        _tmp = _os.path.join(_pdir, "policy.json.tmp")
+        with open(_tmp, "w", encoding="utf-8") as f:
+            _json.dump(cur, f, ensure_ascii=False, indent=2)
+        _os.replace(_tmp, _os.path.join(_pdir, "policy.json"))
+    except Exception:
+        pass
     return state.policy.model_dump()
 
 

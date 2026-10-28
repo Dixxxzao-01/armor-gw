@@ -74,12 +74,8 @@ class ChainMemory:
         if len(chains) > 5:
             keep = sorted(chains.items(), key=lambda x: x[1][0] / (sum(x[1]) or 1), reverse=True)[:5]
             self.data[model] = dict(keep)
-        try:
-            os.makedirs(os.path.dirname(self.path), exist_ok=True)
-            with open(self.path, "w", encoding="utf-8") as f:
-                json.dump(self.data, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        from .persist import save_json
+        save_json(self.path, self.data)
 
     def feedback(self, model: str, ops: list[str], win: bool) -> None:
         """链级胜负回写：重放链失败也要记负，防止反复撞墙。"""
@@ -90,12 +86,8 @@ class ChainMemory:
         if k in chains:
             w, l = chains[k]
             chains[k] = [w + (1 if win else 0), l + (0 if win else 1)]
-            try:
-                os.makedirs(os.path.dirname(self.path), exist_ok=True)
-                with open(self.path, "w", encoding="utf-8") as f:
-                    json.dump(self.data, f, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
+            from .persist import save_json
+            save_json(self.path, self.data)
 
 @dataclass
 class Attempt:

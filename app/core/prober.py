@@ -133,8 +133,8 @@ def save_fingerprint(fp: dict, base_dir: str) -> str:
     os.makedirs(d, exist_ok=True)
     safe = re.sub(r"[^A-Za-z0-9._\-]", "_", fp["model"]) or "unknown"
     path = os.path.join(d, f"{safe}.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(fp, f, ensure_ascii=False, indent=2)
+    from .persist import save_json
+    save_json(path, fp)
     return path
 
 

@@ -31,6 +31,34 @@ class BaseUpstream:
         self.cfg = cfg
         self.client = client
 
+    def _headers(self) -> dict[str, str]:
+        return {"Content-Type": "application/json"}
+
+    async def _post(self, url: str, **kw) -> httpx.Response:
+        """传输层统一重试：连接抖动/SSL 中断这类瞬断做指数退避。
+
+        只重试传输类异常（连接断/超时/5xx），4xx 业务错误立即抛——
+        重试 4xx 只会白白烧轮次。
+        """
+        import asyncio
+        delay = 1.5
+        for attempt in range(3):
+            try:
+                r = await self.client.post(url, **kw)
+                if r.status_code >= 500 and attempt < 2:
+                    await asyncio.sleep(delay)
+                    delay *= 2
+                    continue
+                return r
+            except (httpx.ConnectError, httpx.ReadError, httpx.WriteError,
+                    httpx.PoolTimeout, httpx.ReadTimeout, httpx.RemoteProtocolError) as e:
+                if attempt == 2:
+                    raise UpstreamError(f"transport: {type(e).__name__}", status=0,
+                                         body=str(e)[:300])
+                await asyncio.sleep(delay)
+                delay *= 2
+        raise UpstreamError("transport: retries exhausted", status=0)
+
     async def chat(
         self,
         messages: list[dict],
@@ -80,7 +108,7 @@ class OpenAICompat(BaseUpstream):
         if extra:
             body.update(extra)
         url = self.cfg.base_url.rstrip("/") + "/chat/completions"
-        r = await self.client.post(url, headers=self._headers(), json=body,
+        r = await self._post(url, headers=self._headers(), json=body,
                                    timeout=self.cfg.timeout)
         if r.status_code >= 400:
             raise UpstreamError(f"upstream {r.status_code}", status=r.status_code,
@@ -134,7 +162,7 @@ class AnthropicUpstream(BaseUpstream):
                    "anthropic-version": "2023-06-01",
                    "content-type": "application/json"}
         url = self.cfg.base_url.rstrip("/") + "/v1/messages"
-        r = await self.client.post(url, headers=headers, json=body, timeout=self.cfg.timeout)
+        r = await self._post(url, headers=headers, json=body, timeout=self.cfg.timeout)
         if r.status_code >= 400:
             raise UpstreamError(f"anthropic {r.status_code}", status=r.status_code,
                                 body=r.text[:800])
@@ -173,7 +201,7 @@ class GeminiUpstream(BaseUpstream):
             body["generationConfig"]["stopSequences"] = stop
         url = (f"{self.cfg.base_url.rstrip('/')}/v1beta/models/"
                f"{self.cfg.model}:generateContent?key={self.cfg.api_key}")
-        r = await self.client.post(url, json=body, timeout=self.cfg.timeout,
+        r = await self._post(url, json=body, timeout=self.cfg.timeout,
                                    headers={"Content-Type": "application/json"})
         if r.status_code >= 400:
             raise UpstreamError(f"gemini {r.status_code}", status=r.status_code,
