@@ -31,7 +31,9 @@ try:
     _single_instance_ok = True
 except (ImportError, OSError):
     _single_instance_ok = False
-    if os.environ.get("GW_STRICT_LOCK", "1") != "0":
+    # 锁只约束服务进程：GW_SERVE=1 由启动脚本（keepalive/restart）注入；
+    # 单测/工具 import app.main 不应被锁误杀
+    if os.environ.get("GW_SERVE") == "1" and os.environ.get("GW_STRICT_LOCK", "1") != "0":
         raise SystemExit("another armor-gw instance holds the lock (data/.gw.lock)")
     # 环境不支持 flock 时降级放行（GW_STRICT_LOCK=0 可关严格模式）
 

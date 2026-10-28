@@ -7,7 +7,7 @@ while true; do
     pkill -9 -f "uvicorn app.main" 2>/dev/null
     sleep 2
     set -a; . ./.env; set +a
-    nohup python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8787 > logs/gw.log 2>&1 &
+    GW_SERVE=1 nohup python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8787 > logs/gw.log 2>&1 &
     sleep 8
     # 双实例纠察：启动完成后若进程数 >1，保留最新拉起的、清掉旧尸
     N=$(ps | grep "[u]vicorn app.main" | wc -l)
