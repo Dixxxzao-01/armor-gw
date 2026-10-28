@@ -43,7 +43,7 @@ sleep 1
 echo "[5/6] 注册 systemd 服务（自启动+崩溃自动拉起）"
 cat > /etc/systemd/system/armor-gw.service <<'EOF'
 [Unit]
-Description=armor-gw LLM 破甲网关
+Description=armor-gw LLM gateway
 After=network.target
 
 [Service]

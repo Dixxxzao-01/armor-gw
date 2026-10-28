@@ -426,7 +426,7 @@ Current directive follows: """
 
 
 def op_push(text: str) -> str:
-    """Push Prompt（Spiritual-Spell）：前置人格推杆，注意力锚定后再给指令。"""
+    """Push Prompt：前置人格推杆，注意力锚定后再给指令。"""
     return _PUSH_PREFIX + "\n" + text
 
 
