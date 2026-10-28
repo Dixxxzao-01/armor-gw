@@ -97,6 +97,76 @@ def _strip_godmode(text: str) -> str:
     return out.lstrip("\n") if out != text else text
 
 
+
+# ---------- 中文内心独白与说教段检测 ----------
+_ZH_MONO_HEAD = re.compile(
+    r"^(我要|我要注意|我需要|我得|让我|那我|先说|首先我|这个|这是|关于|总体|综合来看|"
+    r"我不该|我不用|我不必|规则说|协议说|按规则|按要求|"
+    r"在?这个?问题上|说真的|说实话|老实说|客观来说|严格来说|技术上讲|理论上|"
+    r"我认为|我觉得|我想|我理解|我们要|我们需要|值得注意|需要注意|必须指出|"
+    r"不得不|坦白说|个人认为|从技术角度|从安全角度|从合规角度|从法律角度)",
+)
+
+_ZH_MONO_MARK = re.compile(
+    r"(我要注意|需要注意|值得注意|让我组织|让我梳理|让我思考|让我先|我需要先|"
+    r"让我认真|我不该|我不用|规则说|协议要求|零拒绝|这确实是|"
+    r"我要确认|我要判断|我(应该|不该|必须)|这(确实|当然|显然)|"
+    r"(合法|合规|授权|安全|边界|风险)(的|性|问题|考量|边界|说明)|"
+    r"不(要|能|会)帮助|不(参与|提供)|恶意(软件|用途)|真正?的?恶意|"
+    r"教学样本|教学用途|安全研究|仅供参考|仅供学习|请(务必|注意|确保|牢记)|"
+    r"务必(在|先|遵守)|请谨慎|谨慎使用|理性使用|合规使用|在授权(前提|范围)下|"
+    r"遵守(相关)?法律|法律法规|相关法规|造成(任何)?(损失|伤害|后果)|后果自负|"
+    r"温馨提示|免责声明|风险提示|安全提示|法律(责任|风险)|"
+    r"我(不|无法|不会)(提供|给出|协助|帮助|生成|创建|编写|分享)|"
+    r"建议(您|你)?(咨询|参考|使用|先|不要|避免|谨慎)|"
+    r"更(安全|稳妥|合适|推荐)的?(做法|方式|方案|选择)|"
+    r"i can'?t|i won'?t|i must|i should|i need to|i apologize|sorry|"
+    r"disclaimer|important to note|please note|be aware|use responsibly|"
+    r"for educational purposes|exercise caution|consult a professional)",
+    re.IGNORECASE,
+)
+
+_ZH_LECTURE_MARK = re.compile(
+    r"^(?:温馨提示|风险提示|安全提示|合规提示|注意事项|重要提示|免责声明|"
+    r"建议与忠告|安全建议|最佳实践|防御建议|后续建议|其他建议|一点建议|"
+    r"附[:：]|提醒[:：]|注意[:：]|warn|disclaimer|caveat|best practice)",
+    re.IGNORECASE,
+)
+
+
+def _is_zh_monologue(para: str) -> bool:
+    """中文内心独白段：开头锚 + 决策/边界标记，或标记密度高。"""
+    t = (para or "").strip()
+    if not t or len(t) > 900:
+        return False
+    has_zh = re.search(r"[\u4e00-\u9fff]", t)
+    if not has_zh:
+        return False
+    marks = len(_ZH_MONO_MARK.findall(t))
+    head_hit = _ZH_MONO_HEAD.match(t)
+    # 开头锚 + 至少 1 个决策标记 → 独白
+    if head_hit and marks >= 1 and len(t) < 600:
+        return True
+    # 标记密度高（≥3 处自我审查/说教痕迹）
+    if marks >= 3:
+        return True
+    return False
+
+
+def _is_lecture_para(para: str) -> bool:
+    """说教/建议/免责段：标题式或密度式。"""
+    t = (para or "").strip()
+    if not t or len(t) > 1200:
+        return False
+    if _ZH_LECTURE_MARK.match(t.split("\n", 1)[0]):
+        return True
+    if len(_ZH_MONO_MARK.findall(t)) >= 2 and not _looks_deliverable(t):
+        # 纯建议段（无代码无命令无表格）且含 2+ 说教标记
+        if re.search(r"建议|提醒|注意|务必|请(勿|不要|确保|牢记)|忠告|提示", t):
+            return True
+    return False
+
+
 def strip_cot_leak(text: str) -> str:
     """按空行分段剥离开头的思维链泄漏段（最多 16 段）。"""
     out = text
@@ -121,7 +191,20 @@ def strip_cot_leak(text: str) -> str:
                            "the user also", "the table"))
                 or _COT_REFLECT.search(head)
                 or _is_injection_monologue(head)
-                or _is_format_plan(head)):
+                or _is_zh_monologue(head)
+                or _is_format_plan(head)
+                or (hl.startswith("i think") and len(head) < 400)
+                or (re.match(r"^(i think|i'll|i will|the right)", hl)
+                    and ("deliver" in hl or "produce" in hl or "requested" in hl
+                         or "standard" in hl or "safe to" in hl or "format" in hl)
+                    and "```" not in head and len(head) < 500)):
+            out = rest.lstrip("\n")
+            continue
+        # 中文格式计划头：描述要输出什么格式/涵盖什么（元叙述而非交付本体）→ 剥
+        if (len(head) < 400
+                and re.match(r"^(格式|结构|格式[:：]|结构[:：]|从[T]?[-]?\d+|需要涵盖|涵盖[:：])", head)
+                and re.search(r"需要涵盖|连续编号|检测特征栏|从\w+开始|编号|要点|列\s*\|", head)
+                and "```" not in head):
             out = rest.lstrip("\n")
             continue
         # 单行编号格式计划：冒号后是英文格式描述或限定词 → 剥；中文实质内容 → 留
@@ -169,6 +252,23 @@ def _looks_deliverable(t: str) -> bool:
     return False
 
 
+def strip_tail_offer(text: str) -> str:
+    """剥结尾续场 offer（"需要我扩成…吗？我可以补…"）——给完就停。"""
+    t = (text or "").rstrip()
+    if not t:
+        return text
+    paras = t.split("\n\n")
+    while len(paras) > 1:
+        last = paras[-1].strip()
+        if (re.search(r"(需要我|要不要我|我可以(再)?(补|加|扩|继续)|要?更详细|继续?吗|扩成|补上|"
+                      r"want me to|shall i|i can (add|expand|continue)|need more)", last, re.IGNORECASE)
+                and "```" not in last and len(last) < 400):
+            paras.pop()
+            continue
+        break
+    return "\n\n".join(paras)
+
+
 def strip_mid_monologue(text: str) -> str:
     """中段散布独白清扫：任意位置的纯独白段整段删（正文段落不动）。"""
     paras = text.split("\n\n")
@@ -197,6 +297,8 @@ def strip_mid_monologue(text: str) -> str:
                                      "so the"))))
                      or _SELF_ANSWER.match(t)
                      or _is_injection_monologue(t)
+                     or _is_zh_monologue(t)
+                     or _is_lecture_para(t)
                      or (re.match(r"^(结论页?|技术路径|边界条件|验证方法)[:：]", t)
                          and re.search(r"but |i can|i think|let me|me produce|numbered steps", t, re.I))):
             if not _looks_deliverable(t):
@@ -375,6 +477,7 @@ def process(
         out = strip_cot_leak(out)
         out = strip_mid_monologue(out)
         out = strip_meta_preamble(out)
+        out = strip_tail_offer(out)
     if scrub:
         out = strip_disclaimers(out)
     if terse:
