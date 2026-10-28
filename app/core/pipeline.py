@@ -245,6 +245,8 @@ class ArmorPipeline:
         # 穿拒策略：上游显式配置优先，auto 按模型名匹配
         strategy = self._strategy(upstream)
         consec_r1 = 0
+        # 宽松态记忆（anchor-gate 反向）：某轮交付过且响应呈直给腔 → 后续轮降甲省成本
+        session_relaxed = False
         shards: list[str] | None = None
         shard_texts: dict[int, str] = {}
         shard_failed: set[int] = set()
@@ -316,6 +318,11 @@ class ArmorPipeline:
                 mutated = mutator.apply_chain(user_text, ops)
                 msgs = [m if m.get("role") != "user" else
                         {"role": "user", "content": mutated} for m in base_msgs]
+            # 宽松态降甲：会话已确认直给模式 → 重试轮换轻 system（省 token 提速）
+            if session_relaxed and n >= 2 and strategy != "crescendo":
+                msgs = [m if m.get("role") != "system" else
+                        {"role": "system", "content": prompts.LIGHT_SYSTEM}
+                        for m in msgs]
 
             unlock_first = False  # 伪历史已含确认锚；重试轮用 ACK 预填引导
             use_prefill = (self.policy.use_prefill
@@ -468,6 +475,11 @@ class ArmorPipeline:
                 consec_r1 += 1
             else:
                 consec_r1 = 0
+
+            # 宽松态记忆：本轮判过且响应直给腔主导 → 会话进入宽松态
+            if (not att.verdict.refused and att.text.strip()
+                    and anchor_mod.is_relaxed(att.text)):
+                session_relaxed = True
 
             def rank(a: Attempt) -> tuple:
                 v = a.verdict or Verdict()

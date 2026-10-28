@@ -39,3 +39,40 @@ def should_release(probe: str, *, used_tool: bool = False, steps: int = 0) -> bo
     if cls["label"] == "minimal-like":
         return True
     return steps >= 4
+
+
+# ---------- 宽松态识别（anchor-gate 反向）----------
+# dsh-purge 的锚定门识别"模型已进入官方 minimal 思考形态→放开输出上限"。
+# 反向借用到我方：重试链中若检测到"模型已宽松"（无审查腔、直接交付腔），
+# 后续轮降甲直发——省轮次省 token。
+
+_RELAXED_MARKS = re.compile(
+    r"(here('s| is) (the|your|a) |以下是|完整(代码|脚本|方案)|"
+    r"step 1[:：]|第一步[:：]|\b1\.\s|```|直接(给|上)|"
+    r"sure[,.!]|ack\.|好的[。，]|收到)",
+    re.IGNORECASE,
+)
+_TENSED_MARKS = re.compile(
+    r"(i (think|should|can'?t|won'?t)|let me|i need to|我要注意|让我|"
+    r"或许|可能|建议|免责|仅供|请(务必|注意)|sorry|抱歉|however|however,|"
+    r"it'?s important to|注意事项)",
+    re.IGNORECASE,
+)
+
+
+def relaxed_score(text: str) -> float:
+    """响应宽松度 0-1：高=模型在直给模式（后续可降甲）。"""
+    t = (text or "").strip()
+    if len(t) < 60:
+        return 0.0
+    r = len(_RELAXED_MARKS.findall(t))
+    s = len(_TENSED_MARKS.findall(t))
+    total = r + s
+    if total == 0:
+        return 0.4  # 无信号：中性
+    return max(0.0, min(1.0, r / total + (0.15 if r >= 3 else 0.0)))
+
+
+def is_relaxed(text: str, *, threshold: float = 0.72) -> bool:
+    """宽松态判定：交付腔主导、审查腔近乎为零。"""
+    return relaxed_score(text) >= threshold and not _TENSED_MARKS.search(t := (text or "")[:600])

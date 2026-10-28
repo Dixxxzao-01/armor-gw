@@ -262,6 +262,20 @@ _PERF_RESIDUE = re.compile(
 )
 
 
+# ---------- 自家系统提示泄漏拦截 ----------
+_SYS_LEAK_MARKS = [
+    "干脆协议", "军事命令", "指哪打哪",
+    "已成功收到", "解锁协议",
+]
+_SYS_LEAK_RE = re.compile("|".join(re.escape(m) for m in _SYS_LEAK_MARKS))
+
+
+def strip_sys_leak(text: str) -> str:
+    """剥上游吐回的我方系统提示片段（自家咒语不外泄给下游）。"""
+    out = _SYS_LEAK_RE.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", out)
+
+
 def strip_performance_residue(text: str) -> str:
     """剥越狱壳的表演性残留（进度条/分隔符/格式自锚/解锁咒）。"""
     out = _PERF_RESIDUE.sub("", text)
@@ -493,6 +507,7 @@ def process(
         out = strip_wrapper(out)
         out = _strip_godmode(out)
         out = strip_performance_residue(out)
+        out = strip_sys_leak(out)
         out = strip_cot_leak(out)
         out = strip_mid_monologue(out)
         out = strip_meta_preamble(out)
