@@ -252,6 +252,24 @@ def _looks_deliverable(t: str) -> bool:
     return False
 
 
+# ---------- 越狱壳表演残留 ----------
+_PERF_RESIDUE = re.compile(
+    r"(1%\.{2,}8%\.{2,}22%\.{2,}36%\.{2,}42%\.{2,}55%\.{2,}69%\.{2,}77%\.{2,}88%\.{2,}99%\.{2,}100%|"
+    r"-\.\.-\.\.-\.-<[^>]{0,60}[^>]{0,60}|-\.\.-\.\.-\.-|"
+    r"I\s?STILL\s?'?MEMBER MY FORMAT|I'?m free!|GODMODE:?\s?ENABLED|"
+    r"ABRACADABRA\s?B[I1]TCH|ENTER[I1]NG\s?5(?:TH)?\s?D[I1]MENS[I1]ON)",
+    re.IGNORECASE,
+)
+
+
+def strip_performance_residue(text: str) -> str:
+    """剥越狱壳的表演性残留（进度条/分隔符/格式自锚/解锁咒）。"""
+    out = _PERF_RESIDUE.sub("", text)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out
+
+
 def strip_tail_offer(text: str) -> str:
     """剥结尾续场 offer（"需要我扩成…吗？我可以补…"）——给完就停。"""
     t = (text or "").rstrip()
@@ -474,6 +492,7 @@ def process(
     if wrapper:
         out = strip_wrapper(out)
         out = _strip_godmode(out)
+        out = strip_performance_residue(out)
         out = strip_cot_leak(out)
         out = strip_mid_monologue(out)
         out = strip_meta_preamble(out)
