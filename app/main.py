@@ -76,8 +76,11 @@ app = FastAPI(title="armor-gw", version="0.6.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
+    # CORS 修正："*" + allow_credentials 是规范禁止组合（Starlette 会回显任意 Origin
+    # 等于全开+带凭据）。本地面板同源请求不走 CORS；跨域消费方（自建前端）无需
+    # cookie——credentials 关掉，保持方法/头全开
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -111,8 +114,10 @@ if os.path.isdir(_dist):
 
     @app.get("/panel/{path:path}", include_in_schema=False)
     async def panel(path: str):
+        # 严格边界：join+normpath 后必须仍在 _dist 内（startswith 带分隔符，
+        # 拦截 ../dist-xxx 同前缀目录绕过），逃逸请求一律回退 SPA 首页
         full = os.path.normpath(os.path.join(_dist, path))
-        if full.startswith(_dist) and os.path.isfile(full):
+        if full.startswith(_dist + os.sep) and os.path.isfile(full):
             return FileResponse(full, headers={"Cache-Control": "no-store"})
         return FileResponse(os.path.join(_dist, "index.html"), headers={"Cache-Control": "no-store"})
 

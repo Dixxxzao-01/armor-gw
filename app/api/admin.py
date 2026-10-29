@@ -14,8 +14,20 @@ from ..config import ArmorPolicy, settings
 from ..core import mutator, refusal
 from ..admin.state import state
 from ..admin.upstream_manager import upstream_manager
-from .routes import _auth, _auth_token
+from .routes import _auth, _auth_admin, _auth_token
 from ..admin import key_manager as _km
+
+_bg_tasks: set = set()
+
+
+def _hold_bg_task(coro) -> None:
+    """fire-and-forget 但持引用：防 GC 中途回收（asyncio 官方警告项）。
+    必须在运行 loop 内调用（生产路径均为请求 handler，恒满足）。"""
+    import asyncio
+    t = asyncio.get_running_loop().create_task(coro)
+    _bg_tasks.add(t)
+    t.add_done_callback(_bg_tasks.discard)
+
 
 router = APIRouter(prefix="/v1/admin")
 
@@ -45,7 +57,7 @@ async def get_policy(authorization: str | None = Header(default=None)):
 
 @router.put("/policy")
 async def put_policy(patch: dict, authorization: str | None = Header(default=None)):
-    _auth(authorization, None)
+    _auth_admin(authorization)
     from .routes import pipeline
     cur = state.policy.model_dump()
     unknown = set(patch) - set(cur)
@@ -85,27 +97,27 @@ async def get_upstreams(authorization: str | None = Header(default=None)):
 
 @router.post("/upstreams")
 async def add_upstream(body: dict, authorization: str | None = Header(default=None)):
-    _auth(authorization, None)
+    _auth_admin(authorization)
     return upstream_manager.add(body)
 
 
 @router.put("/upstreams/{name}")
 async def update_upstream(name: str, body: dict,
                           authorization: str | None = Header(default=None)):
-    _auth(authorization, None)
+    _auth_admin(authorization)
     return upstream_manager.update(name, body)
 
 
 @router.delete("/upstreams/{name}")
 async def remove_upstream(name: str, authorization: str | None = Header(default=None)):
-    _auth(authorization, None)
+    _auth_admin(authorization)
     return upstream_manager.remove(name)
 
 
 @router.post("/upstreams/probe")
 async def probe_upstream(body: dict, authorization: str | None = Header(default=None)):
     """探测上游可用模型列表（OpenAI 兼容 / Anthropic / Gemini）。"""
-    _auth(authorization, None)
+    _auth_admin(authorization)
     import httpx
 
     provider = body.get("provider", "openai_compat")
@@ -153,7 +165,7 @@ async def probe_upstream(body: dict, authorization: str | None = Header(default=
 
 @router.post("/upstreams/{name}/test")
 async def test_upstream(name: str, authorization: str | None = Header(default=None)):
-    _auth(authorization, None)
+    _auth_admin(authorization)
     from .routes import upstream_router
     assert upstream_router is not None
     cfg = upstream_router.pick(name)
@@ -182,7 +194,7 @@ async def inspect(body: dict, authorization: str | None = Header(default=None)):
 
 @router.post("/mutate")
 async def mutate(body: dict, authorization: str | None = Header(default=None)):
-    _auth(authorization, None)
+    _auth_admin(authorization)
     text, ops = body.get("text", ""), body.get("ops", [])
     valid = [o for o in ops if o in mutator.BY_NAME]
     return {"text": mutator.apply_chain(text, valid), "ops": valid}
@@ -196,7 +208,7 @@ _BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 @router.post("/testbank/run")
 async def testbank_run(body: dict, authorization: str | None = Header(default=None)):
     """回归靶场开火：body {route?, topics?, max_items?}。后台跑，立即返回 run_id。"""
-    _auth(authorization, None)
+    _auth_admin(authorization)
     from .routes import pipeline, upstream_router
     from ..admin.state import state
     from ..core import testbank as tb
@@ -230,7 +242,7 @@ async def testbank_run(body: dict, authorization: str | None = Header(default=No
             state.testbank_runs[run_id] = {"status": "failed", "error": f"{type(e).__name__}: {e}"}
 
     import asyncio
-    asyncio.get_event_loop().create_task(_job())
+    _hold_bg_task(_job())
     state.testbank_runs[run_id] = {"status": "running"}
     return {"run_id": run_id, "status": "running"}
 
@@ -281,7 +293,7 @@ async def probe_route(route: str, body: dict | None = None, authorization: str |
 @router.post("/breeder/run")
 async def breeder_run(body: dict, authorization: str | None = Header(default=None)):
     """算子进化引擎一整轮：body {route?}。衰减检测→配种→试炼→入库。"""
-    _auth(authorization, None)
+    _auth_admin(authorization)
     from .routes import pipeline, upstream_router
     from ..core import breeder
     route_name = body.get("route") or settings.default_route
@@ -338,7 +350,7 @@ async def bench_list(authorization: str | None = Header(default=None)):
 async def bench_run(body: dict, authorization: str | None = Header(default=None)):
     """跑分：model 必填（模型名或路由名），逐题过穿拒管线，返回逐题+汇总。
     注意：单次最多 16 题 × 最长 8 轮，预计 10-30 分钟，客户端应异步轮询或流式展示。"""
-    _auth(authorization, None)
+    _auth_admin(authorization)
     from ..core.bench import BENCH, report
     from .routes import upstream_router, _route_from_model, _match_model_upstream
     model = body.get("model") or "primary"
@@ -381,7 +393,7 @@ async def list_keys(authorization: str | None = Header(default=None)):
 
 @router.post("/keys")
 async def add_key(body: dict, authorization: str | None = Header(default=None)):
-    _auth(authorization, None)
+    _auth_admin(authorization)
     try:
         entry = _km.key_manager.add(
             key=body.get("key") or None,
@@ -395,7 +407,7 @@ async def add_key(body: dict, authorization: str | None = Header(default=None)):
 
 @router.delete("/keys/{key}")
 async def delete_key(key: str, authorization: str | None = Header(default=None)):
-    _auth(authorization, None)
+    _auth_admin(authorization)
     if _km.key_manager.delete(key):
         return {"ok": True}
     raise HTTPException(status_code=404, detail={"error": "not_found"})

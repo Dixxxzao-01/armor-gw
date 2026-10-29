@@ -87,6 +87,13 @@ class Settings(BaseModel):
     downstream_keys: list[str] = Field(
         default_factory=lambda: [k for k in _env("GW_KEYS", "sk-local-dev").split(",") if k]
     )
+    # 管理面板专用 key：配了则 /v1/admin/* 写操作只认这些 key（读操作放开给所有有效 key）
+    # 未配置时向后兼容——全部 key 视作管理员（单人自用场景）
+    admin_keys: list[str] = Field(
+        default_factory=lambda: [k for k in _env("GW_ADMIN_KEYS", "").split(",") if k]
+    )
+    # 管理面板写操作是否需要 admin key（默认 False：单机自用不设防；公网部署文档建议开）
+    admin_write_guard: bool = _env("GW_ADMIN_WRITE_GUARD", "0") == "1"
     # 单 key 每分钟请求数
     rate_limit_rpm: int = _env_int("GW_RPM", 120)
     # 下游模型名 → 上游渠道名 的路由别名

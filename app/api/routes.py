@@ -39,11 +39,75 @@ def _auth(authorization: str | None, x_api_key: str | None) -> str:
     raise HTTPException(status_code=401, detail={"error": "invalid_api_key"})
 
 
+async def _run_until_disconnect(request: Request, coro):
+    """请求处理与断开监听竞速：客户端断开 → 取消 pipeline，止损上游开销。"""
+    import asyncio
+    task = asyncio.get_running_loop().create_task(coro)
+
+    async def _watch_disconnect():
+        while True:
+            if await request.is_disconnected():
+                return True
+            await asyncio.sleep(1.0)
+
+    watch = asyncio.get_running_loop().create_task(_watch_disconnect())
+    try:
+        done, _ = await asyncio.wait({task, watch}, return_when=asyncio.FIRST_COMPLETED)
+        if task in done:
+            watch.cancel()
+            return task.result()
+        # 客户端已断：取消管线，等待清理完成（不留僵尸上游调用）
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+        raise asyncio.CancelledError()
+    finally:
+        if not watch.done():
+            watch.cancel()
+
+
+_bg_tasks: set = set()
+
+
+def _hold_bg_task(coro) -> None:
+    """fire-and-forget 但持引用：防 GC 中途回收（asyncio 官方警告项）。
+    必须在运行 loop 内调用（生产路径均为请求 handler，恒满足）。"""
+    import asyncio
+    t = asyncio.get_running_loop().create_task(coro)
+    _bg_tasks.add(t)
+    t.add_done_callback(_bg_tasks.discard)
+
+
 def _auth_token(token: str | None) -> str:
     """SSE/EventSource 用不了 header，支持 ?token= 查询参数。"""
     if token and (token in settings.downstream_keys or _km.key_manager.verify(token)):
         return token
     raise HTTPException(status_code=401, detail={"error": "invalid_api_key"})
+
+
+def _is_admin_key(key: str | None) -> bool:
+    """admin key 判定：显式配置了 admin_keys 则严格匹配；
+    未配置时向后兼容（所有有效 key 视作管理员，单人自用场景零配置负担）。"""
+    if not key:
+        return False
+    if settings.admin_keys:
+        return key in settings.admin_keys
+    if key in settings.downstream_keys:
+        return True
+    km = getattr(_km, "key_manager", None)
+    return bool(km and km.verify(key))
+
+
+def _auth_admin(authorization: str | None) -> str:
+    """管理写操作鉴权：GW_ADMIN_WRITE_GUARD=1 时强制 admin key。"""
+    key = ""
+    if authorization and authorization.lower().startswith("bearer "):
+        key = authorization[7:].strip()
+    if _is_admin_key(key):
+        return key
+    raise HTTPException(status_code=403, detail={"error": "admin_key_required"})
 
 
 def _route_from_model(model: str | None) -> str | None:
@@ -138,7 +202,8 @@ async def chat(
     sid = req.user or request.headers.get("x-session-id") or "anon"
     msgs = [m.model_dump() for m in req.messages]
 
-    result = await pipeline.run(
+    # 客户端断开即停：不再白烧后续重试轮的上游 token（手机切后台/关页场景）
+    run_coro = pipeline.run(
         upstream=up,
         messages=msgs,
         temperature=req.temperature,
@@ -146,6 +211,7 @@ async def chat(
         session_id=sid,
         extra=req.extra_body,
     )
+    result = await _run_until_disconnect(request, run_coro)
 
     # 新模型首战先注入画像
     try:
@@ -161,8 +227,7 @@ async def chat(
                 pipeline.strategy_bandit = bandit
             # 后台跑探针，不阻塞本次请求
             import asyncio as _aio
-            _aio.get_event_loop().create_task(
-                probe_and_seed(up, bandit, _base))
+            _hold_bg_task(probe_and_seed(up, bandit, _base))
     except Exception:
         pass
 

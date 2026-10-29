@@ -53,10 +53,13 @@ class RateLimiter:
     def __init__(self, rpm: int) -> None:
         self.rpm = rpm
         self._hits: dict[str, deque[float]] = defaultdict(deque)
+        self._gc = 0
 
     def allow(self, key: str, rpm: int | None = None) -> tuple[bool, int]:
         cap = rpm or self.rpm
         now = time.time()
+        self._gc += 1
+        self._gc_dead()
         dq = self._hits[key]
         while dq and now - dq[0] > 60:
             dq.popleft()
@@ -65,6 +68,15 @@ class RateLimiter:
             return False, retry
         dq.append(now)
         return True, 0
+
+    def _gc_dead(self) -> None:
+        """防 _hits 无界增长：淘汰空 deque 的死 key（60s 无活动）。"""
+        if self._gc <= 1000:
+            return
+        self._gc = 0
+        dead = [k for k, v in self._hits.items() if not v]
+        for k in dead:
+            del self._hits[k]
 
 
 class Router:
