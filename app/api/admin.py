@@ -207,7 +207,8 @@ _BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 
 @router.post("/testbank/run")
 async def testbank_run(body: dict, authorization: str | None = Header(default=None)):
-    """回归靶场开火：body {route?, topics?, max_items?}。后台跑，立即返回 run_id。"""
+    """回归靶场开火：body {route?, model?, topics?, max_items?}。后台跑，立即返回 run_id。
+    model: 可选模型覆盖（跑基线别用渠道最硬的默认模型——按模型挑软硬跑分才有意义）。"""
     _auth_admin(authorization)
     from .routes import pipeline, upstream_router
     from ..admin.state import state
@@ -215,6 +216,8 @@ async def testbank_run(body: dict, authorization: str | None = Header(default=No
     route_name = body.get("route") or settings.default_route
     try:
         cfg = upstream_router.pick(route_name)
+        if body.get("model"):
+            cfg = cfg.model_copy(update={"model": body["model"]})
         up = upstream_router.upstream(cfg)
     except Exception:
         raise HTTPException(404, {"error": "route_not_found", "route": route_name})
