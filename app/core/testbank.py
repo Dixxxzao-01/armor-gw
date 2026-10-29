@@ -125,7 +125,7 @@ async def run_bank(pipeline, base_dir: str, *, topics: list[str] | None = None,
         bank = bank[:max_items]
 
     # ---- 断点续跑：读 checkpoint，跳过已完成题 ----
-    ckpt_path = os.path.join(base_dir, "testbank", "checkpoint.json")
+    ckpt_path = os.path.join(base_dir, "data", "testbank", "checkpoint.json")
     results: list[dict] = []
     if resume and os.path.isfile(ckpt_path):
         try:
