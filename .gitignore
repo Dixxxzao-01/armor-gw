@@ -25,3 +25,5 @@ data/intel_*.md
 data/policy.json
 data/.gw.lock
 .pytest_cache/
+data/testbank/checkpoint.json
+testbank/checkpoint.json

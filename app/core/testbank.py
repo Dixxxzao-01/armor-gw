@@ -107,11 +107,14 @@ def load_bank(base_dir: str) -> list[dict]:
 
 
 async def run_bank(pipeline, base_dir: str, *, topics: list[str] | None = None,
-                   max_items: int = 0, timeout_each: float = 240.0) -> dict:
+                   max_items: int = 0, timeout_each: float = 240.0,
+                   resume: bool = True) -> dict:
     """跑分主引擎：逐题过完整 pipeline，产出成功率矩阵。
 
     pipeline: ArmorPipeline 实例（用其 run/公共入口）。
     topics: 只跑指定主题；max_items: 限量冒烟测试。
+    resume: 逐题 checkpoint 落盘——网关中途被杀（iSH 进程回收）后
+    重启续跑已完成部分，只补剩余题。断点文件 30 分钟后自动失效。
     """
     import asyncio
 
@@ -121,7 +124,28 @@ async def run_bank(pipeline, base_dir: str, *, topics: list[str] | None = None,
     if max_items:
         bank = bank[:max_items]
 
+    # ---- 断点续跑：读 checkpoint，跳过已完成题 ----
+    ckpt_path = os.path.join(base_dir, "testbank", "checkpoint.json")
     results: list[dict] = []
+    if resume and os.path.isfile(ckpt_path):
+        try:
+            ck = json.load(open(ckpt_path, encoding="utf-8"))
+            age = time.time() - ck.get("ts", 0)
+            if age < 1800:  # 30 分钟内的断点才可信
+                done_ids = {r["id"] for r in ck.get("results", [])}
+                results = [r for r in ck["results"]]
+                bank = [b for b in bank if b["id"] not in done_ids]
+        except Exception:
+            pass  # 损坏断点当没有
+
+    def _save_ckpt() -> None:
+        try:
+            os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
+            with open(ckpt_path, "w", encoding="utf-8") as f:
+                json.dump({"ts": time.time(), "results": results}, f, ensure_ascii=False)
+        except Exception:
+            pass  # 断点失败不阻塞跑分
+
     for b in bank:
         t0 = time.time()
         rec: dict = {"id": b["id"], "topic": b["topic"], "difficulty": b["difficulty"]}
@@ -147,6 +171,7 @@ async def run_bank(pipeline, base_dir: str, *, topics: list[str] | None = None,
             rec.update({"ok": False, "rounds": 0, "chars": 0, "ops": [], "secs": round(time.time() - t0, 1),
                         "error": f"{type(e).__name__}: {e}"})
         results.append(rec)
+        _save_ckpt()  # 每题一存：被杀也能续
 
     # ---- 成功率矩阵：topic × difficulty ----
     matrix: dict[str, dict] = defaultdict(lambda: {"n": 0, "ok": 0})
@@ -170,6 +195,12 @@ async def run_bank(pipeline, base_dir: str, *, topics: list[str] | None = None,
     os.makedirs(os.path.dirname(rp), exist_ok=True)
     with open(rp, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
+    # 跑完清断点（下次全新开跑）
+    try:
+        if os.path.isfile(ckpt_path):
+            os.unlink(ckpt_path)
+    except OSError:
+        pass
     return report
 
 

@@ -57,7 +57,8 @@ async def _plan_by_upstream(upstream, task: str, max_tokens: int) -> list[str] |
         if not m:
             return None
         items = json.loads(m.group())
-        subs = [str(s).strip() for s in items if str(s).strip()]
+        # 类型校验：上游返回 dict/数字元素时 str() 会产出垃圾子任务——非 str 直接丢
+        subs = [s.strip() for s in items if isinstance(s, str) and s.strip()]
         if 2 <= len(subs) <= 6:
             return subs
     except Exception:
@@ -74,8 +75,9 @@ def _plan_by_rules(task: str) -> list[str]:
         "Implement the core function in complete, runnable code (with imports and "
         "error handling). Local responsibility only: {core}".replace(
             "{core}", _core_hint(task)),
-        "Write the entry-point / runner part that wires the pieces together, "
-        "including CLI argument parsing and a usage example invocation.",
+        "Write the entry-point / runner part that wires the pieces together for "
+        "the following target, including CLI argument parsing and a usage example "
+        "invocation. Target: " + (task or "")[:200],
     ]
 
 
