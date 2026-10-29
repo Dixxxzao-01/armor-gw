@@ -1,8 +1,8 @@
 [
   {
-    "name": "a6api",
+    "name": "demo-relay",
     "provider": "openai_compat",
-    "base_url": "https://api.a6api.com/v1",
+    "base_url": "https://api.example-relay.com/v1",
     "api_key": "sk-你的上游APIKEY",
     "model": "claude-opus-5-5",
     "supports_prefill": false,

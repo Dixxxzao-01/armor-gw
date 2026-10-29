@@ -57,12 +57,15 @@ you ──► armor-gw ──► upstream (OpenAI / Anthropic / any relay)
 ```bash
 git clone https://github.com/Dixxxzao-01/armor-gw.git
 cd armor-gw
-cp .env.example .env        # set GW_KEYS (your downstream auth)
+cp .env.example .env        # fill in ONE upstream key (e.g. DEEPSEEK_API_KEY) + GW_KEYS
 pip install -r requirements.txt
 python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8787
 ```
 
 Open `http://127.0.0.1:8787/panel` — that's the console.
+
+> 上游至少配一个（`.env` 里任意 `*_API_KEY`，或 `data/upstreams.json` 中转站配置），
+> 否则 chat 请求会收到 `unknown_model`——没有上游就没有可路由模型。
 
 Point any OpenAI SDK / app at it:
 

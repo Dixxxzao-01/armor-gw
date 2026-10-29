@@ -100,7 +100,7 @@ class Settings(BaseModel):
     default_route: str = _env("GW_DEFAULT_ROUTE", "primary")
     policy: ArmorPolicy = ArmorPolicy()
     upstreams: list[UpstreamConfig] = Field(default_factory=list)
-    log_dir: str = _env("GW_LOG_DIR", "/root/armor-gw/logs")
+    log_dir: str = _env("GW_LOG_DIR", "logs")
 
 
 def _build_upstreams() -> list[UpstreamConfig]:

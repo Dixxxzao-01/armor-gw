@@ -130,7 +130,7 @@ if os.path.isdir(_dist):
 async def root() -> dict:
     return {
         "name": "armor-gw",
-        "version": "2.5.2",
+        "version": "0.6.0",
         "openai_compatible": True,
         "endpoints": ["/v1/chat/completions", "/v1/models", "/v1/armor/probe",
                       "/v1/armor/config", "/health"],

@@ -1,10 +1,13 @@
 #!/bin/bash
 # armor-gw 一键部署脚本（Linux 服务器版）
 # 用法: bash deploy.sh
+# 可选环境变量: GW_DIR（项目根目录，默认脚本上级目录）
 set -e
-cd "$(dirname "$0")"
+GW_DIR="${GW_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+cd "$GW_DIR"
 
 echo "═══ armor-gw 部署开始 ═══"
+echo "项目目录: $GW_DIR"
 echo "[1/6] 系统探测"
 if [ -f /etc/os-release ]; then . /etc/os-release; fi
 echo "    系统: ${PRETTY_NAME:-unknown}"
@@ -48,8 +51,8 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/root/armor-gw
-EnvironmentFile=/root/armor-gw/.env
+WorkingDirectory=$GW_DIR
+EnvironmentFile="$GW_DIR"/.env
 ExecStart=/usr/bin/python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8787
 Restart=always
 RestartSec=5
@@ -81,7 +84,7 @@ if [ "$CODE" = "200" ]; then
     echo "  部署成功 ✓"
     echo "  控制面板: http://$IP:8787/panel"
     echo "  网关 API: http://$IP:8787/v1/chat/completions"
-    echo "  管理密钥: 见 /root/armor-gw/.env 的 GW_KEYS"
+    echo "  管理密钥: 见 "$GW_DIR"/.env 的 GW_KEYS"
     echo "════════════════════════════════════════"
     curl -s http://127.0.0.1:8787/ | head -c 300; echo
 else

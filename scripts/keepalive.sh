@@ -1,6 +1,6 @@
 #!/bin/sh
 # armor-gw 守护：每 30 秒检查，挂了就拉起（iSH 环境后台进程会被系统回收）
-cd /root/armor-gw
+cd "$(dirname "$0")/.."
 while true; do
   if ! curl -s --max-time 4 -o /dev/null http://127.0.0.1:8787/health 2>/dev/null; then
     # 先清尸：杀掉可能僵住/打架的旧进程，保证单实例
