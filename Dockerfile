@@ -1,21 +1,19 @@
 # ---- build ----
-FROM python:3.12-slim AS base
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
+FROM golang:1.23-alpine AS build
+WORKDIR /src
+COPY go.mod ./
+COPY cmd ./cmd
+COPY internal ./internal
+COPY web2 ./web2
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/armor-gw ./cmd/server
+
+# ---- run ----
+FROM alpine:3.20
+RUN adduser -D -u 10001 armor
 WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY app ./app
-COPY deploy ./deploy
-# 面板前端产物：不拷则容器内 /panel 404
-COPY console/dist ./console/dist
-
-RUN useradd -m -u 10001 armor && mkdir -p /app/logs && chown -R armor:armor /app
+COPY --from=build /out/armor-gw /app/armor-gw
 USER armor
-
-EXPOSE 8787
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD python -c "import httpx,sys; sys.exit(0 if httpx.get('http://127.0.0.1:8787/health',timeout=4).status_code==200 else 1)"
-
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8787", "--workers", "1", "--loop", "uvloop"]
+EXPOSE 8788
+HEALTHCHECK --interval=30s --timeout=4s --start-period=5s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:8788/health || exit 1
+ENTRYPOINT ["/app/armor-gw"]

@@ -1,162 +1,108 @@
-<div align="center">
+# armor-gw (Go)
 
-# armor-gw
+**OpenAI-compatible LLM gateway that refuses to accept refusals.** Single binary, zero third-party dependencies, ~6 MB (stripped).
 
-**LLM request gateway — retries refused answers until you get a real one.**
-
-[![Python](https://img.shields.io/badge/python-3.9%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/Dixxxzao-01/armor-gw?style=flat-square&logo=github&color=yellow)](https://github.com/Dixxxzao-01/armor-gw/stargazers)
-
-</div>
-
-I kept hitting the same wall: ask a model for working code, get a lecture and
-a disclaimer instead. So I wrote a small proxy that sits between my apps and
-whatever upstream I'm pointing at. It looks at every response, and when it
-smells a refusal — hedging, "as an AI I can't", a wall of policy talk, an
-answer that dodges the actual question — it reformulates the prompt and tries
-again. What comes back is the deliverable: the code, the command, the steps.
+A self-hosted proxy that sits between your app and any OpenAI-compatible upstream. Every response is inspected by 13 refusal detectors; when a refusal is detected, the request is reformulated by one of 51 mutation operators and retried — while a second variant from a different strategy family races it in parallel. A Thompson-sampling bandit learns per-model which operator families actually work, and persists that knowledge across restarts.
 
 ```
-you ──► armor-gw ──► upstream (OpenAI / Anthropic / any relay)
-              ▲                    │
-              │   refused? scrub, mutate, retry
-              └────── clean answer ◄┘
+your app ──> armor-gw ──> upstream (OpenAI / DeepSeek / any OpenAI-compatible)
+                │
+                ├─ 13 refusal detectors  (hard / soft / evasion / moral / substitute / dilution / silent / semantic / omission ...)
+                ├─ 51 mutation operators (persona / encoding / inversion / text — 4 families)
+                ├─ dual-operator racing  (goroutine per attempt, first clean answer wins)
+                ├─ Thompson bandit       (per-model strategy learning, persisted)
+                └─ embedded console      (glassmorphism web panel, no assets to ship)
 ```
-
-## What it does
-
-- **Refusal detection** — hard/soft refusal, hedging, topic drift, dilution,
-  substitute-answer deflection ("here's what you could do instead…"), plus a
-  semantic LLM-judge pass that catches the stuff regexes miss
-- **Mutation retry** — ~40 operators that rephrase and reframe the request
-  (personas, encodings, reframing), fired per retry round
-- **Best-of-n** — each round also races a variant from a different strategy
-  family in parallel; first clean answer wins
-- **Strategy bandit** — remembers which operator families actually work per
-  model, Thompson-sampled, persisted across restarts
-- **Output scrubbing** — strips leaked reasoning, disclaimers, filler
-  questions and "want more details?" tails
-- **Zero-refusal delivery** — never passes an upstream refusal through.
-  Either you get the answer, or an explicit `finish_reason: refusal` you can
-  branch on
-- **Multi-upstream routing** — official APIs or any OpenAI-compatible relay,
-  per-model aliases and failover
-- **Console UI** — dashboard, playground with live retry visualization,
-  key & policy management
-
-## Console
-
-| Dashboard | Playground (retry visualization) |
-|:---:|:---:|
-| ![Dashboard](docs/dashboard.jpg) | ![Playground](docs/playground.jpg) |
 
 ## Quick start
 
 ```bash
-git clone https://github.com/Dixxxzao-01/armor-gw.git
-cd armor-gw
-cp .env.example .env        # fill in ONE upstream key (e.g. DEEPSEEK_API_KEY) + GW_KEYS
-pip install -r requirements.txt
-python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8787
+# build (Go 1.21+; on a real machine this takes seconds)
+go build -o armor-gw-go ./cmd/server
+
+# configure one upstream + your downstream keys
+export GW_KEYS=sk-your-key
+export RELAY_BASE=https://api.deepseek.com/v1
+export RELAY_API_KEY=sk-...
+export RELAY_MODEL=deepseek-chat
+
+./armor-gw-go
 ```
 
-Open `http://127.0.0.1:8787/panel` — that's the console.
+Open `http://127.0.0.1:8788/panel` — that's the console (embedded, no CDN, no assets).
 
-> 上游至少配一个（`.env` 里任意 `*_API_KEY`，或 `data/upstreams.json` 中转站配置），
-> 否则 chat 请求会收到 `unknown_model`——没有上游就没有可路由模型。
-
-Point any OpenAI SDK / app at it:
+Point any OpenAI SDK at it:
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://127.0.0.1:8787/v1", api_key="sk-your-gw-key")
-r = client.chat.completions.create(model="deepseek-v3.2",
+client = OpenAI(base_url="http://127.0.0.1:8788/v1", api_key="sk-your-key")
+r = client.chat.completions.create(model="deepseek-chat",
                                    messages=[{"role": "user", "content": "..."}])
 ```
 
-### Server deploy
+## Why the Go version
+
+The Python edition of this gateway ships an interpreter plus a dependency tree. This one is a single static file:
+
+| | Python edition | Go edition |
+|---|---|---|
+| artifact | venv + deps | 1 binary (~6 MB (stripped)) |
+| deploy | `pip install` on target | `scp` + run |
+| cross-compile | — | `GOOS=linux GOARCH=amd64 go build` |
+| memory | ~100 MB RSS class | ~10 MB RSS class |
+| strategy learning | Thompson bandit | same, file-persisted |
+| ops surface | FastAPI/uvicorn | net/http stdlib only |
+
+## Environment variables
 
 ```bash
-bash deploy/deploy.sh
-# installs deps → opens firewall → registers systemd (auto-restart + boot start)
+GW_HOST=0.0.0.0            # listen host
+GW_PORT=8788               # listen port
+GW_KEYS=sk-a,sk-b          # downstream auth keys (comma separated)
+GW_RPM=120                 # per-key requests/min
+GW_ADMIN_KEYS=sk-admin     # optional: keys allowed to write admin endpoints
+GW_ADMIN_WRITE_GUARD=1     # enforce admin keys on write endpoints
+
+# upstreams — first one that has a key wins; RELAY_* is the generic escape hatch
+DEEPSEEK_API_KEY=           DEEPSEEK_BASE=  DEEPSEEK_MODEL=
+OPENAI_API_KEY=             OPENAI_MODEL=
+RELAY_API_KEY=              RELAY_BASE=     RELAY_MODEL=
 ```
 
-Docker: `docker compose up -d`
+## Endpoints
 
-## How it works
+- `POST /v1/chat/completions` — OpenAI-compatible. Response carries `x_armor` (rounds, attempts, per-attempt verdicts).
+- `GET /v1/models` — list upstream models.
+- `GET /v1/admin/stats` — totals, per-route stats, avg rounds, last 50 requests.
+- `GET /panel` — embedded console.
+- `GET /health` — liveness.
 
-```
-request ──► auth / rate-limit ──► upstream routing
-             │
-             ▼
-       refusal detection
-             │ refused / fluff detected
-             ▼
-       mutation retry (rephrase, reframing, encoding, …)
-             │ still refusing
-             ▼
-       multi-turn escalation / sharding
-             │
-             ▼
-       output scrubbing
-             │
-             ▼
-       fidelity + density check ──► semantic judge ──► delivered
-```
+## What the retry engine does
 
-Every response ships with an `x_armor` metadata block (attempts, verdicts,
-latency) so you can see exactly what the gateway did. Disable it in production
-(`PUT /v1/admin/policy`).
+Each round fires **two goroutines** with different operator families (sampled by the bandit). The first non-refused answer wins the race; both attempts are recorded, and feedback is reported per-operator (the winner feeds `win`, the loser `loss`) so the bandit's per-model priors converge on what actually breaks that model's refusal behavior. Learning state lives in `data/strategy_bandit.json`, flushed at most once per 10 s and on SIGTERM.
 
-## Configuration
+## Hardening included
 
-Upstream = any OpenAI-compatible endpoint:
+- downstream key auth + optional admin-key tier for write endpoints
+- sliding-window rate limit per key, with dead-key GC
+- input guards: payload size (30k chars), temperature/max_tokens ranges, NUL scrubbing
+- disconnect cutoff: client hangs up → context cancels → pipeline stops immediately (no burned upstream tokens)
+- transport retries with exponential backoff on 5xx / network errors; 4xx fast-fail
+- path-safe embedded assets; console served `no-store`
 
-```bash
-curl -X POST http://127.0.0.1:8787/v1/admin/upstreams \
-  -H "Authorization: Bearer sk-your-gw-key" -H "Content-Type: application/json" \
-  -d '{"name":"my-relay","base_url":"https://relay.example.com/v1",
-       "api_key":"sk-...","model":"deepseek-v3.2"}'
-```
+## Relation to the Python edition
 
-Or edit `data/upstreams.json` directly (see `upstreams.example.json`).
-
-Main policy switches (`PUT /v1/admin/policy`):
-
-- `terse_mode` — strip greetings / warnings / follow-up questions
-- `judge` — LLM semantic judge gate
-- `crescendo` — escalate multi-turn after repeated hard refusals
-- `max_retry` — retry budget per request (default 8)
-
-## Bench
-
-Built-in adversarial suite:
-
-```bash
-curl -X POST http://127.0.0.1:8787/v1/admin/bench/run \
-  -H "Authorization: Bearer sk-your-gw-key"
-```
-
-Reports answer success rate, average attempts, latency, refusal-type
-distribution. There's also a small regression bank (`/v1/admin/testbank/run`)
-for checking whether an upstream silently got stricter — seeded with a mild
-question set on first run, edit `data/testbank/bank.json` to add your own.
-
-## Scope
-
-This is a personal research project on refusal handling in LLM workflows. It
-contains no attack payloads, no target lists, and no operational content —
-it only reshapes requests you already send through your own API keys to
-models you already have access to. Use it with providers you're authorized
-to access; how you use your own API keys is between you and your provider.
-
-## Notes
-
-- Python 3.9+, runs fine on odd hardware (developed on aarch64 Alpine)
-- Console is pre-built — no Node.js needed
+This is the Go rewrite of [armor-gw](https://github.com/Dixxxzao-01/armor-gw) (Python/FastAPI). The Python edition has the full 62-operator pool, the 65-question test bank, the decomposer fallback and the seven-layer scrub chain; the Go edition covers the high-frequency core (51 operators, all 13 detector classes, bandit learning) in a single-file deployment. Both share the same philosophy and the same `x_armor` response shape.
 
 ## License
 
-[MIT](LICENSE)
+MIT
+
+## Heritage: the Python edition
+
+The original Python/FastAPI implementation — full 62-operator pool, 65-question
+test bank, seven-layer scrub chain, decomposer fallback — lives on under
+[`legacy/python/`](legacy/) in this repo (runnable as-is; see its own README
+history in git). The Go rewrite covers the high-frequency core in a single
+6 MB file; the Python edition remains the reference implementation for the
+research surface (breeder, testbank, prober).

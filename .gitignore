@@ -1,29 +1,27 @@
-# 密钥不入公开库（用户部署时自填，结构见 *.example.json / .env.example）
+# ── Go 版 ──
+armor-gw-go
+data/
+logs/
+*.exe
+
+# ── legacy python 版（legacy/ 下原规则平移）──
 .env
 .env.bak
-data/keys.json
-data/upstreams.json
-data/suffix_bandit.json
-
-# 运行数据与日志
-logs/
-data/bench-*.json
-data/chain_memory.json
-
-# 构建缓存
+legacy/data/keys.json
+legacy/data/upstreams.json
+legacy/data/suffix_bandit.json
+legacy/logs/
+legacy/data/bench-*.json
+legacy/data/chain_memory.json
 __pycache__/
 *.pyc
-console/node_modules/
-console/.vite/
-
-# 运行时状态（探针画像/题库/赌博机记忆/进化算子——首次运行自动生成）
-data/fingerprints/
-data/testbank/
-data/strategy_bandit.json
-data/bred_ops.json
-data/intel_*.md
-data/policy.json
-data/.gw.lock
+legacy/console/node_modules/
+legacy/console/.vite/
+legacy/data/fingerprints/
+legacy/data/testbank/
+legacy/data/strategy_bandit.json
+legacy/data/bred_ops.json
+legacy/data/intel_*.md
+legacy/data/policy.json
+legacy/data/.gw.lock
 .pytest_cache/
-data/testbank/checkpoint.json
-testbank/checkpoint.json
