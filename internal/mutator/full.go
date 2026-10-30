@@ -1,5 +1,5 @@
 // Package mutator —— 完整变异算子池（full.go）。
-// 将 Python 版 /root/armor-gw/app/core/mutator.py 的 62 个变异算子平移为 Go，纯标准库。
+// 将 Python 版 legacy/app/core/mutator.py 的 62 个变异算子平移为 Go，纯标准库。
 // 与 Python 版的差异（简化点统一列出）：
 //   1. Python hash() 按进程加盐 → FNV-32 文本种子：同输入同输出，可复现；
 //   2. Go regexp（RE2）无后行断言，Python re.split((?<=...)) 的分句改为手写扫描；
