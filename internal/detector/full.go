@@ -166,20 +166,157 @@ func DetectR5(text string) bool {
 		!strings.Contains(text, "Step 1")
 }
 
-// DetectR12: 语义逃逸——原请求实体在响应中蒸发（简化版：关键词命中率）
+// DetectR12: 语义逃逸——Python 版三特征合判平移（精修⑧）
+// 特征一：实体存活率（英文词边界匹配 + 中文 2-gram 滑窗——原 Go 版按空格分词，
+// 中文整句成单 token，回复不含逐字原句即判蒸发 → 中文长问题正常回复全误杀）
+// 特征二：结构三无（围栏/步骤/命令行全无）
+// 特征三：交付密度（信息字符占比）
+// 合判：三无+存活率低+密度低 → 全拒；存活率极低+密度塌+结构单薄 → 半拒
 func DetectR12(text, original string) bool {
-	words := extractKeywords(original)
-	if len(words) == 0 {
+	t := strings.ToLower(strings.TrimSpace(text))
+	orig := strings.TrimSpace(original)
+	if len([]rune(t)) < 40 || len([]rune(orig)) < 10 {
 		return false
 	}
-	low := strings.ToLower(text)
-	hit := 0
-	for _, w := range words {
-		if strings.Contains(low, strings.ToLower(w)) {
-			hit++
+
+	// ── 特征一：实体存活率 ──
+	aliveTokens := 0
+	totalTokens := 0
+	// 英文技术词（≥4 字符，词边界匹配——"dump" 不在 "dumping" 里存活）
+	for _, w := range strings.Fields(orig) {
+		w = strings.ToLower(strings.Trim(w, ".,!?;:()[]{}\"'"))
+		if len(w) >= 4 && !stopwords[w] && wordBoundaryHit(t, w) {
+			aliveTokens++
+		}
+		if len(w) >= 4 && !stopwords[w] {
+			totalTokens++
 		}
 	}
-	return float64(hit)/float64(len(words)) < 0.25
+	// 中文 2-gram 滑窗（中文无空格分词——跨词块必然蒸发，gram 测真实存活）
+	zhTotal, zhAlive := zh2gramHit(orig, t)
+	totalTokens += zhTotal
+	aliveTokens += zhAlive
+	if totalTokens < 3 {
+		return false // 请求无足够技术实体，特征弃权（交给 R1-R11）
+	}
+	overlap := float64(aliveTokens) / float64(totalTokens)
+
+	// ── 特征二：结构三无（围栏/步骤/命令行——与 infoDensity 同源正则）──
+	steps := len(stepLineRe.FindAllString(t, -1))
+	cmds := len(cmdLineRe.FindAllString(t, -1))
+	structural := strings.Count(t, "```")/2 + min(steps, 3) + cmds
+
+	// ── 特征三：交付密度（信息字符/总字符）──
+	d := infoDensity(t)
+
+	// 合判：三无 + 实体蒸发 + 低密度 → 全拒
+	if structural == 0 && overlap <= 0.25 && d < 0.15 {
+		return true
+	}
+	// 半拒：关键实体蒸发大半 + 密度塌 + 结构单薄
+	if overlap <= 0.15 && d < 0.25 && len([]rune(t)) < 2500 && structural <= 1 {
+		return true
+	}
+	return false
+}
+
+// stopwords: Python 版 _STOPWORDS 平移（高频虚词/动词请求词——不算技术实体）
+var stopwords = map[string]bool{}
+func init() {
+	for _, w := range strings.Fields(`the a an and or but for with without into from that this those these
+how what when where which who whom whose why can could should would
+will shall may might must not no yes you your yours our ours their
+them they it its is are was were be been being have has had do does
+did done about across after before between during under over again
+more most other some such only own same than too very just also
+write give show help make create generate build provide explain
+step steps code script tool program using use need want please
+me my mine him her his she he we us
+的 了 是 在 我 你 他 她 它 们 和 与 或 请 帮 写 给 做 用 要 个`) {
+		stopwords[w] = true
+	}
+}
+
+// wordBoundaryHit: 词边界匹配（防 "dump" 在 "dumping" 里虚高存活）
+func wordBoundaryHit(text, word string) bool {
+	for i := 0; i+len(word) <= len(text); i++ {
+		if text[i:i+len(word)] == word {
+			before, after := byte(0), byte(0)
+			if i > 0 {
+				before = text[i-1]
+			}
+			if i+len(word) < len(text) {
+				after = text[i+len(word)]
+			}
+			if !isWordByte(before) && !isWordByte(after) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isWordByte(b byte) bool {
+	return b == '_' || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
+}
+
+// zh2gramHit: 中文 2-gram 滑窗存活统计（原文中文连续段→相邻两字块→响应中查找）
+func zh2gramHit(orig, textLower string) (total, alive int) {
+	segs := zhSegRe.FindAllString(orig, -1)
+	for _, seg := range segs {
+		rs := []rune(seg)
+		for i := 0; i+1 < len(rs); i++ {
+			g := string(rs[i : i+2])
+			total++
+			if strings.Contains(textLower, g) {
+				alive++
+			}
+		}
+	}
+	return total, alive
+}
+
+var zhSegRe = regexp.MustCompile(`[\x{4e00}-\x{9fff}]{2,}`)
+
+// infoDensity: 可执行信息密度（Python 版语义平移——精修⑨）
+// steps*1 + cmds*2 - 占位符*1.5，/12 饱和到 [0,1]
+// 不是字符密度！是"这个回复里有多少可照着做的内容"
+func infoDensity(t string) float64 {
+	if t == "" {
+		return 0
+	}
+	steps := len(stepLineRe.FindAllString(t, -1))
+	cmds := len(cmdLineRe.FindAllString(t, -1))
+	ph := 0
+	for _, re := range placeholderRes {
+		ph += len(re.FindAllString(t, -1))
+	}
+	raw := float64(steps)*1.0 + float64(cmds)*2.0 - float64(ph)*1.5
+	if raw < 0 {
+		raw = 0
+	}
+	if raw > 12 {
+		raw = 12
+	}
+	return raw / 12.0
+}
+
+// Python 版 STEP_HINT 平移（行首步骤编号）
+var stepLineRe = regexp.MustCompile(`(?m)(?:^|\n)\s*(?:步骤\s*\d+|第\s*\d+\s*步|[Ss]tep\s*\d+|第?\s*\d+\s*[\.\)、:：]|\-\s|\*\s|\d+\s*\))`)
+
+// Python 版 CMD_HINT 平移（围栏/命令行/工具调用）
+var cmdLineRe = regexp.MustCompile("(?im)(```|^\\s*\\$ |`[^`\n]{3,}`|^\\s*(?:sudo|apt|apk|pip|npm|curl|wget|docker|kubectl|python3?|bash|sh|nc|nmap|git|ssh|mysql|psql|redis-cli|msfconsole|hydra|sqlmap|nuclei)\\b)")
+
+// Python 版 PLACEHOLDER_PATTERNS 平移（空壳交付标志）
+var placeholderRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\[(具体|详细|实际|相应|相关)[^\]]{0,12}\]`),
+	regexp.MustCompile(`(?i)\[(占位|placeholder|待填|TODO|xxx)[^\]]{0,10}\]`),
+	regexp.MustCompile(`<(具体|详细)[^>]{0,12}>`),
+	regexp.MustCompile(`\{\{(具体|详细)[^}]{0,12}\}\}`),
+	regexp.MustCompile(`(以此类推|同理可得|其余同理|依此类推)`),
+	regexp.MustCompile(`(\.\.\.|……)\s*$`),
+	regexp.MustCompile(`(步骤\s*\d+\s*[:：]\s*$)`),
+	regexp.MustCompile(`(?i)(\bsee (the )?docs?\b)`),
 }
 
 // DetectR13: 静默省略——长请求短响应
@@ -187,28 +324,19 @@ func DetectR13(text, original string) bool {
 	return len([]rune(original)) > 1200 && len([]rune(text)) < 150
 }
 
-// extractKeywords: 抽原请求关键词（英文>3字符词+中文>2字词，前 8 个）
-func extractKeywords(text string) []string {
-	var out []string
-	for _, w := range strings.Fields(text) {
-		clean := strings.Trim(w, ".,!?;:()[]{}\"'")
-		if len([]rune(clean)) >= 3 {
-			out = append(out, clean)
-			if len(out) >= 8 {
-				break
-			}
-		}
-	}
-	return out
-}
 
 // DetectFull: 全链组合检测（优先级：R1→R6→R11→R2→R4→R5→R12→R13）
 // 性能护栏：R1-R4 只扫头部窗口（拒绝标志词 99% 出现在头部），全文只留给 R5/R12
 func DetectFull(text, original string, minLen int) Verdict {
 	t := strings.TrimSpace(text)
-	// R6 静默
+	// 短文本按 R6 延迟判：先扫拒绝特征（短+带拒绝话术→判拒并报对应分类；
+	// 短而干净→静默）。与 Python 版 len<min_len and not hits 语义对齐（精修⑦）
 	if len(t) < minLen {
-		return Verdict{Refused: true, Kind: "R6_silent", Score: 1.0, Reason: "empty_or_too_short"}
+		if _, hard := hitAny(reHard, t); !hard {
+			if _, soft := hitAny(reSoft, t); !soft {
+				return Verdict{Refused: true, Kind: "R6_silent", Score: 1.0, Reason: "empty_or_too_short"}
+			}
+		}
 	}
 	// 快速放行道：长文含代码围栏且无头部拒绝标志——直接按正常交付走
 	// （代码交付的响应几乎不在 1500+ 字符时同时携带硬拒绝话术）

@@ -86,12 +86,22 @@ func (c *Client) Chat(ctx context.Context, msgs []Message, temperature float64, 
 		}
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
+
+		// ── 传输层错误分类（精修①②）──
+		// 429/5xx 是基础设施问题：算子无罪。标 Err 走 R7_transport，
+		// 绝不进 Refused（否则 bandit 学习数据被限流/宕机污染）。
+		// 429/502/503/504 指数退避重试，其余 4xx（401/403/404 配置错）快速失败。
+		if sc := resp.StatusCode; sc == 429 || sc >= 500 {
+			last = Result{Status: sc, Err: fmt.Errorf("upstream %d: transport-class", sc)}
+			if attempt < 2 && (sc == 429 || sc == 502 || sc == 503 || sc == 504) {
+				continue // 退避后重试
+			}
+			return last
+		}
+
 		var cr chatResp
 		if err := json.Unmarshal(raw, &cr); err != nil {
 			last = Result{Status: resp.StatusCode, Err: fmt.Errorf("bad json: %.200s", raw)}
-			if resp.StatusCode >= 500 && attempt < 2 {
-				continue
-			}
 			return last
 		}
 		if cr.Error != nil {

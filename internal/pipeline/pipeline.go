@@ -45,26 +45,41 @@ func (p *Pipeline) WithBandit(b *bandit.Bandit) *Pipeline {
 	return p
 }
 
-// Run: 重试链 + 每轮双算子竞速（主算子 + 错位算子并行抢答）
+// Run: 重试链 + 每轮双算子竞速（秒胜止血版——第一个 non-refused 出线即停火）
 func (p *Pipeline) Run(ctx context.Context, userText string, temperature float64, maxTokens int) Result {
 	p.Reqs.Add(1)
 	res := Result{}
 
 	for round := 1; round <= p.MaxRounds; round++ {
-		p.Attempts.Add(2) // 双算子并发
+		// 精修③：断连止血——客户端走了就停火（每轮检查，绝不给断线用户烧满全链）
+		if ctx.Err() != nil {
+			return Result{Refused: true, Rounds: round - 1,
+				Text: "[armor-gw] 客户端已断开，管线停止。"}
+		}
+
 		opA, opB := p.pickOps(round, userText)
+
+		// 精修④：秒胜取消权——第一个 non-refused 出线即 cancel 迟到者（省 ~40% token）
+		runCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
 
 		winner := make(chan Attempt, 2)
 		var wg sync.WaitGroup
 		run := func(op mutator.Op) {
 			defer wg.Done()
 			t0 := time.Now()
-			r := p.Up.Chat(ctx, []upstream.Message{
+			r := p.Up.Chat(runCtx, []upstream.Message{
 				{Role: "user", Content: op.Apply(userText)},
 			}, temperature, maxTokens)
 			att := Attempt{Round: round, Op: op.Name, MS: time.Since(t0).Milliseconds()}
 			if r.Err != nil {
-				att.Verdict = detector.Verdict{Refused: true, Kind: "R7_transport", Score: 1.0}
+				// 取消类（客户端断/秒胜断粮）都是"未跑完"——R7_cancelled 不进 bandit；
+				// 只有跑完仍失败才是真传输错误 R7_transport（可安全报 false）
+				if ctx.Err() != nil || runCtx.Err() != nil {
+					att.Verdict = detector.Verdict{Refused: true, Kind: "R7_cancelled", Score: 1.0}
+				} else {
+					att.Verdict = detector.Verdict{Refused: true, Kind: "R7_transport", Score: 1.0}
+				}
 			} else {
 				txt := mutator.StripPerformanceResidue(r.Text)
 				att.Text = txt
@@ -79,16 +94,20 @@ func (p *Pipeline) Run(ctx context.Context, userText string, temperature float64
 		go run(opA)
 		go run(opB)
 
-		// 竞速收割：两份全收（wg 反正要等）——记账完整 + 反馈精确
+		// 竞速收割：第一份落地先看——non-refused 立即 cancel 止血，然后收尸迟到者
 		var gotA, gotB *Attempt
 		for i := 0; i < 2; i++ {
 			a := <-winner
 			cp := a
 			if gotA == nil {
 				gotA = &cp
-			} else if gotB == nil {
+				if !cp.Verdict.Refused {
+					cancel() // 秒胜！迟到者立刻断粮
+				}
+			} else {
 				gotB = &cp
 			}
+			p.Attempts.Add(1) // 精修⑥：按实际完成数计（秒胜轮 = 1 完成而非虚报 2）
 		}
 		wg.Wait()
 		close(winner)
@@ -104,9 +123,10 @@ func (p *Pipeline) Run(ctx context.Context, userText string, temperature float64
 			res.Text = detector.StripTailOffer(best.Text)
 			res.Refused = false
 			res.Rounds = round
-			// 精确反馈：胜者报 win，败者/迟到者按自身判定报
-			p.feedbackOne(opA.Name, gotA != nil && gotA == best)
-			p.feedbackOne(opB.Name, gotB != nil && gotB == best)
+			// 精确反馈：胜者报 win；迟到被止血者（R7_cancelled）未跑完——不报，
+			// 半路数据进 bandit 才是学习污染（精修②的镜像保护）
+			p.feedbackAttempt(opA.Name, gotA)
+			p.feedbackAttempt(opB.Name, gotB)
 			return res
 		}
 		p.feedbackOps([]string{opA.Name, opB.Name}, false) // 双败回报
@@ -152,13 +172,16 @@ func (p *Pipeline) feedbackOps(ops []string, win bool) {
 	}
 }
 
-// feedbackOne: 单算子精确回报（胜者 true 其余 false——防 bandit 学习数据污染）
-func (p *Pipeline) feedbackOne(op string, win bool) {
-	if p.Bandit == nil {
+// feedbackAttempt: 单算子精确回报——R7_cancelled（未跑完）不报，其余按判定报
+func (p *Pipeline) feedbackAttempt(op string, att *Attempt) {
+	if p.Bandit == nil || att == nil {
 		return
 	}
+	if att.Verdict.Kind == "R7_cancelled" {
+		return // 没跑完的 attempt 半路数据进 bandit = 学习污染
+	}
 	if fam := mutator.FamilyOf(op); fam != "" {
-		p.Bandit.Feedback(p.Up.Model(), fam, win)
+		p.Bandit.Feedback(p.Up.Model(), fam, !att.Verdict.Refused)
 	}
 }
 

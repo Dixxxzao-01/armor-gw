@@ -178,7 +178,13 @@ func main() {
 			log.Printf("%s %s %d %v", r.Method, r.URL.Path, rw.code, time.Since(t0).Round(time.Millisecond))
 		})
 	}
-	srv := &http.Server{Addr: addr, Handler: logMW(mux), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: logMW(mux),
+		// 精修⑤：超时四件套——慢速攻击/挂死连接防御
+		ReadHeaderTimeout: 10 * time.Second,  // 头部慢速（slowloris）
+		ReadTimeout:       15 * time.Minute,  // body 读取上限（管线重试链最长场景）
+		WriteTimeout:      15 * time.Minute,  // 响应写回（含长思考）
+		IdleTimeout:       2 * time.Minute,   // keep-alive 闲置回收
+	}
 	// 优雅退出：SIGINT/SIGTERM → 活动连接 5s 排水 + bandit 终态落盘
 	go func() {
 		sig := make(chan os.Signal, 1)
